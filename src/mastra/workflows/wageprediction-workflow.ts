@@ -140,7 +140,7 @@ const predictWage = createStep({
           age: sd.age,
           // 🛑 FIX: Use the external API's key name ("experienceYears") 
           // while referencing the LLM's data key (sd.years_experience)
-          experienceYears: sd.years_experience, 
+          years_experience: sd.years_experience, 
           education: sd.education,
           gender: sd.gender,
           country: sd.country,
