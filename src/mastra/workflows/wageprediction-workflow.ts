@@ -163,6 +163,7 @@ const predictWage = createStep({
             // Read the full response details for debugging
             const errorText = await response.text(); 
             console.error(`Prediction API failed with status ${response.status}. Response Body: ${errorText}`);
+            console.error('Payload sent:', JSON.stringify(payload));
              throw new Error(`External API Error: ${response.status}`);
         }
 
