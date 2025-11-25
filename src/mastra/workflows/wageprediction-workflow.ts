@@ -242,18 +242,25 @@ const predictWage = createStep({
             education: sd.education,
             gender: sd.gender,
             country: sd.country,
-            industry: sd.industry,
+            industry: sd.industry
         };
 
         // ... (Rest of the fetch/API logic remains the same) ...
         try {
             const response = await fetch(
-                "[https://plumber-api-2-latest.onrender.com/predict](https://plumber-api-2-latest.onrender.com/predict)",
-                {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                }
+
+              "https://plumber-api-2-latest.onrender.com/predict",
+
+              {
+
+                method: "POST",
+
+                headers: { "Content-Type": "application/json" },
+
+                body: JSON.stringify(payload),
+
+              }
+
             );
 
             // ... (Error handling and JSON parsing remains the same) ...
@@ -289,7 +296,6 @@ const predictWage = createStep({
         }
     },
 });
-
 
 /* ---------------------------------------------------------------------------
  * STEP 5 — OPTIONAL LLM EXPLANATION OF THE PREDICTION
