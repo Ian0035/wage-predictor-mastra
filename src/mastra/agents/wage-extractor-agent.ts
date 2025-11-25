@@ -24,5 +24,5 @@ export const wageExtractorAgent = new Agent({
     { role: "system", content: "Always use the provided JSON schema to format your output. If information is missing, add the field name to the 'missingFields' array." },
   ],
   // Use a capable model (like Groq, assuming the provider is configured via env)
-  model: "groq/llama3-70b-8192", 
+  model: "groq/llama-3.3-70b-versatile", 
 });
