@@ -174,6 +174,7 @@ const predictWage = createStep({
     status: z.string(),
     message: z.string(),
     predictedWage: z.number().optional(),
+    structuredData: z.any().optional(), // Pass through for context
   }),
   execute: async ({ inputData }) => {
     // If fields are missing, return a question back to the user
@@ -181,6 +182,7 @@ const predictWage = createStep({
       return {
         status: "need_more_info",
         message: inputData.nextQuestion ?? "More information required.",
+        structuredData: inputData.structuredData,  // Pass through for context
       };
     }
 
@@ -231,6 +233,7 @@ const predictWage = createStep({
         status: "success",
         predictedWage,
         message: `Your predicted wage is $${predictedWage.toFixed(2)} per year.`,
+        structuredData: sd,  // Pass through for context
       };
     } catch (error: any) {
       // Log error internally, return friendly response
@@ -239,6 +242,7 @@ const predictWage = createStep({
       return {
         status: "error",
         message: "Sorry, the wage prediction service is currently unavailable.",
+        structuredData: sd,  // Pass through for context
       };
     }
   },
