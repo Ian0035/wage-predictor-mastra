@@ -262,6 +262,7 @@ const predictWage = createStep({
               }
 
             );
+            console.log("Payload sent to Prediction API:", JSON.stringify(payload));
 
             // ... (Error handling and JSON parsing remains the same) ...
             if (!response.ok) {
