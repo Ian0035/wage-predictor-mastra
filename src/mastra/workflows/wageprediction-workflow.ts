@@ -1,73 +1,72 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
-import { WageDataSchema } from "../agents/wage-extractor-agent";
+
+// NOTE: You would typically define a Zod schema matching the LLM output 
+// for structured data validation here, but we'll use z.any() for simplicity 
+// since the LLM output is dictated by the agent's string instructions.
 
 // -----------------------------------------
-// STEP 1 — CAPTURE USER INPUT
+// STEP 1 — CAPTURE INPUT & STATE
 // -----------------------------------------
-// Add the input type to capture the existing state (optional)
 const captureInput = createStep({
   id: "capture-input",
   inputSchema: z.object({
     text: z.string(),
-    // This allows the workflow to receive the previous state on subsequent calls
     currentState: z.any().optional(), 
   }),
   outputSchema: z.object({
     userText: z.string(),
-    // The previous state is carried forward
     existingData: z.any(), 
   }),
   execute: async ({ inputData }) => {
     return { 
-        userText: inputData.text,
-        // If currentState is provided, use it; otherwise, start with an empty object
-        existingData: inputData.currentState || {}, 
+      userText: inputData.text,
+      existingData: inputData.currentState || {}, 
     };
   },
 });
 
 // -----------------------------------------
-// STEP 2 — EXTRACT STRUCTURED DATA USING LLM (Updated for Context)
+// STEP 2 — EXTRACT STRUCTURED DATA USING LLM
 // -----------------------------------------
 const extractInfo = createStep({
   id: "extract-info",
   inputSchema: z.object({
     userText: z.string(),
-    existingData: z.any(), // Now receives the existing state
+    existingData: z.any(),
   }),
   outputSchema: z.object({
     extraction: z.any(),
   }),
   execute: async ({ inputData, mastra }: any) => {
     const agent = mastra.getAgent("wageExtractorAgent");
-    
-    // 🛑 CONTEXT PROMPT: Give the agent all the data it knows so far.
     const contextString = JSON.stringify(inputData.existingData, null, 2);
     
-    const systemPrompt = `
-You are an AI assistant that extracts and normalizes user data for a wage prediction model.
-The current known data state is: ${contextString}
+    // The instruction to merge is added here in the user prompt
+    const userPrompt = `
+CURRENT STATE (Known Data): ${contextString}
 
-The new user input is provided below. You must merge the new information with the known data and re-evaluate all required fields (age, education, gender, etc.).
-Return a single, complete JSON object.
+NEW USER INPUT: ${inputData.userText}
+
+Using the system instructions provided to you, merge the new input with the CURRENT STATE and return the complete, required JSON object.
 `;
 
     const response = await agent.generate([
-      { role: "system", content: systemPrompt },
-      { role: "user", content: inputData.userText }, // Only send the new text here
+      { role: "user", content: userPrompt },
     ]);
 
-    // Assuming the agent returns the text content in `response.text` as per docs
     let parsed;
     const responseText = response.text || JSON.stringify(response);
 
     try {
-      // Clean up markdown code blocks if the LLM adds them
-      const cleanJson = responseText.replace(/```json|```/g, "").trim();
-      parsed = JSON.parse(cleanJson);
+        // Robust JSON extraction logic (as discussed previously)
+        const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
+        let jsonString = (jsonMatch && jsonMatch[1]) ? jsonMatch[1].trim() : responseText.trim();
+        
+        parsed = JSON.parse(jsonString);
     } catch (err) {
-      parsed = { error: "Invalid model output", raw: responseText };
+        console.error('Parse error:', responseText);
+        parsed = { error: 'JSON_PARSE_FAILED', raw: responseText };
     }
 
     return { extraction: parsed };
@@ -75,33 +74,44 @@ Return a single, complete JSON object.
 });
 
 // -----------------------------------------
-// STEP 3 — CHECK FOR MISSING FIELDS
+// STEP 3 — CHECK FOR MISSING FIELDS & ERROR HANDLE
 // -----------------------------------------
 const checkMissingData = createStep({
-  id: "check-missing-data",
-  inputSchema: z.object({
-    extraction: z.any(),
-  }),
-  outputSchema: z.object({
-    readyForPrediction: z.boolean(),
-    missingFields: z.array(z.string()),
-    nextQuestion: z.string().nullable(),
-    structuredData: z.any(),
-  }),
-  execute: async ({ inputData }) => {
-    const missing = inputData.extraction.missingFields || [];
+  id: "check-missing-data",
+  inputSchema: z.object({
+    extraction: z.any(),
+  }),
+  outputSchema: z.object({
+    readyForPrediction: z.boolean(),
+    missingFields: z.array(z.string()),
+    nextQuestion: z.string().nullable(),
+    structuredData: z.any(),
+  }),
+  execute: async ({ inputData }) => {
+    // Handle JSON parsing failures
+    if (inputData.extraction.error) {
+        return {
+            readyForPrediction: false,
+            nextQuestion: "Sorry, I had trouble understanding that. Please restate your information.", 
+            missingFields: ['data_quality'],
+            structuredData: inputData.extraction,
+        };
+    }
 
-    return {
-      readyForPrediction: missing.length === 0,
-      missingFields: missing,
-      nextQuestion: inputData.extraction.nextQuestion ?? null,
-      structuredData: inputData.extraction,
-    };
-  },
+    // Normal missing data check
+    const missing = inputData.extraction.missingFields || [];
+
+    return {
+      readyForPrediction: missing.length === 0,
+      missingFields: missing,
+      nextQuestion: inputData.extraction.nextQuestion ?? null,
+      structuredData: inputData.extraction,
+    };
+  },
 });
 
 // -----------------------------------------
-// STEP 4 — CALL THE WAGE PREDICTION API
+// STEP 4 — CALL THE WAGE PREDICTION API (Axios replaced with fetch)
 // -----------------------------------------
 const predictWage = createStep({
   id: "predict-wage",
@@ -111,51 +121,63 @@ const predictWage = createStep({
     nextQuestion: z.string().nullable(),
     missingFields: z.array(z.string()),
   }),
-  // 🛑 CRITICAL CHANGE: Simplify the output schema to just return a message or the predicted wage.
   outputSchema: z.object({
-    message: z.string(), // New field to hold either the question or the result
+    status: z.string(),
+    message: z.string(),
     predictedWage: z.number().optional(),
-    status: z.string(), // Keep status
-    // Remove missingFields and nextQuestion here as we are rolling them into 'message'
   }),
-
   execute: async ({ inputData }) => {
-        if (!inputData.readyForPrediction) {
-            return {
-                status: "need_more_info",
-                // 🛑 FIX: Use ?? '' to ensure the message is always a string.
-                message: inputData.nextQuestion ?? 'More information required.', 
-            };
+    if (!inputData.readyForPrediction) {
+      return {
+        status: "need_more_info",
+        message: inputData.nextQuestion ?? 'More information required.', 
+      };
+    }
+
+    const sd = inputData.structuredData;
+    // NOTE: Keys must exactly match the external API:
+    const payload = {
+      age: sd.age,
+      experienceYears: sd.years_experience, // Use years_experience from LLM output
+      education: sd.education,
+      gender: sd.gender,
+      country: sd.country,
+      industry: sd.industry,
+    };
+
+    try {
+        // Use native fetch instead of axios in Mastra environment
+        const response = await fetch(
+          "https://plumber-api-2-latest.onrender.com/predict",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+            // Timeout is handled here if necessary
+          }
+        );
+
+        if (!response.ok) {
+            const errorData = await response.json();
+             throw new Error(`Prediction API failed with status ${response.status}: ${errorData.message}`);
         }
 
-    const sd = inputData.structuredData;
+        const data = await response.json();
 
-    const payload = {
-      age: sd.age,
-      experienceYears: sd.years_experience,
-      education: sd.education,
-      gender: sd.gender,
-      country: sd.country,
-      industry: sd.industry,
-    };
-
-    const response = await fetch(
-      "https://plumber-api-2-latest.onrender.com/predict",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }
-    );
-
-    const data = await response.json();
-
-    return {
-      status: "success",
-      predictedWage: data.predictedWage,
-      message: `Your predicted wage is $${data.predictedWage.toFixed(2)} per year.` // 🛑 Return a prediction message
-    };
-  },
+        return {
+          status: "success",
+          predictedWage: data.predictedWage,
+          message: `Your predicted wage is $${data.predictedWage.toFixed(2)} per year.`,
+        };
+    } catch (error: any) {
+        console.error('Prediction error:', error.message || error);
+        // Map the HttpException logic to a simple error message
+        return {
+            status: "error",
+            message: "Sorry, the wage prediction service is currently unavailable.",
+        };
+    }
+  },
 });
 
 // -----------------------------------------
@@ -165,16 +187,19 @@ export const wagePredictionWorkflow = createWorkflow({
   id: "wage-prediction-workflow",
   inputSchema: z.object({
     text: z.string(),
+    currentState: z.any().optional(),
   }),
-  // 🛑 CRITICAL CHANGE: Simplify the final output schema
   outputSchema: z.object({
     status: z.string(),
-    message: z.string(), // New field for the conversational response
+    message: z.string(), 
     predictedWage: z.number().optional(),
-  }),
+    // NOTE: You need to return the structuredData here so the client can send it back 
+    // on the next turn via currentState
+    structuredData: z.any().optional(), 
+}),
 })
-  .then(captureInput)
-  .then(extractInfo)
-  .then(checkMissingData)
-  .then(predictWage)
-  .commit();
+  .then(captureInput)
+  .then(extractInfo)
+  .then(checkMissingData)
+  .then(predictWage)
+  .commit();
