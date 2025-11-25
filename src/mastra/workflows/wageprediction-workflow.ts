@@ -160,8 +160,10 @@ const predictWage = createStep({
         );
 
         if (!response.ok) {
-            const errorData = await response.json();
-             throw new Error(`Prediction API failed with status ${response.status}: ${errorData.message}`);
+            // Read the full response details for debugging
+            const errorText = await response.text(); 
+            console.error(`Prediction API failed with status ${response.status}. Response Body: ${errorText}`);
+             throw new Error(`External API Error: ${response.status}`);
         }
 
         const data = await response.json();
@@ -174,11 +176,13 @@ const predictWage = createStep({
           message: `Your predicted wage is $${predictedWage.toFixed(2)} per year.`,
         };
     } catch (error: any) {
-        console.error('Prediction error:', error.message || error);
-        // Map the HttpException logic to a simple error message
+        // Log the full error to your Mastra console
+        console.error('Prediction API Failed:', error.message || error); 
+        
         return {
             status: "error",
-            message: "Sorry, the wage prediction service is currently unavailable.",
+            // Keep the user-friendly message, but the console will show the real error
+            message: "Sorry, the wage prediction service is currently unavailable.", 
         };
     }
   },
