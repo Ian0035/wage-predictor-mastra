@@ -5,44 +5,57 @@ import { WageDataSchema } from "../agents/wage-extractor-agent";
 // -----------------------------------------
 // STEP 1 — CAPTURE USER INPUT
 // -----------------------------------------
+// Add the input type to capture the existing state (optional)
 const captureInput = createStep({
   id: "capture-input",
   inputSchema: z.object({
     text: z.string(),
+    // This allows the workflow to receive the previous state on subsequent calls
+    currentState: z.any().optional(), 
   }),
   outputSchema: z.object({
     userText: z.string(),
+    // The previous state is carried forward
+    existingData: z.any(), 
   }),
   execute: async ({ inputData }) => {
-    return { userText: inputData.text };
+    return { 
+        userText: inputData.text,
+        // If currentState is provided, use it; otherwise, start with an empty object
+        existingData: inputData.currentState || {}, 
+    };
   },
 });
 
 // -----------------------------------------
-// STEP 2 — EXTRACT STRUCTURED DATA USING LLM
+// STEP 2 — EXTRACT STRUCTURED DATA USING LLM (Updated for Context)
 // -----------------------------------------
 const extractInfo = createStep({
   id: "extract-info",
   inputSchema: z.object({
     userText: z.string(),
+    existingData: z.any(), // Now receives the existing state
   }),
   outputSchema: z.object({
     extraction: z.any(),
-  }), // 🛑 CRITICAL FIX: Destructure 'mastra' instead of 'agents'
+  }),
   execute: async ({ inputData, mastra }: any) => {
+    const agent = mastra.getAgent("wageExtractorAgent");
+    
+    // 🛑 CONTEXT PROMPT: Give the agent all the data it knows so far.
+    const contextString = JSON.stringify(inputData.existingData, null, 2);
+    
     const systemPrompt = `
 You are an AI assistant that extracts and normalizes user data for a wage prediction model.
-Return a JSON object with age, years_experience, education, gender, country, industry,
-missingFields (array), and nextQuestion (string).
-Always return strictly valid JSON.
-`; // 🛑 NEW DOCS PATTERN: Retrieve the agent by the name you registered in mastra/index.ts
-    // We used 'wageExtractorAgent' in the previous step.
+The current known data state is: ${contextString}
 
-    const agent = mastra.getAgent("wageExtractorAgent"); // Use the agent's generate method with the prompt messages
+The new user input is provided below. You must merge the new information with the known data and re-evaluate all required fields (age, education, gender, etc.).
+Return a single, complete JSON object.
+`;
 
     const response = await agent.generate([
       { role: "system", content: systemPrompt },
-      { role: "user", content: inputData.userText },
+      { role: "user", content: inputData.userText }, // Only send the new text here
     ]);
 
     // Assuming the agent returns the text content in `response.text` as per docs
@@ -91,27 +104,29 @@ const checkMissingData = createStep({
 // STEP 4 — CALL THE WAGE PREDICTION API
 // -----------------------------------------
 const predictWage = createStep({
-  id: "predict-wage",
-  inputSchema: z.object({
-    readyForPrediction: z.boolean(),
-    structuredData: z.any(),
-    nextQuestion: z.string().nullable(),
-    missingFields: z.array(z.string()),
-  }),
-  outputSchema: z.object({
-    status: z.string(),
-    predictedWage: z.number().optional(),
-    nextQuestion: z.string().optional(),
-    missingFields: z.array(z.string()).optional(),
-  }),
-  execute: async ({ inputData }) => {
-    if (!inputData.readyForPrediction) {
-      return {
-        status: "need_more_info",
-        missingFields: inputData.missingFields,
-        nextQuestion: inputData.nextQuestion ?? undefined,
-      };
-    }
+  id: "predict-wage",
+  inputSchema: z.object({
+    readyForPrediction: z.boolean(),
+    structuredData: z.any(),
+    nextQuestion: z.string().nullable(),
+    missingFields: z.array(z.string()),
+  }),
+  // 🛑 CRITICAL CHANGE: Simplify the output schema to just return a message or the predicted wage.
+  outputSchema: z.object({
+    message: z.string(), // New field to hold either the question or the result
+    predictedWage: z.number().optional(),
+    status: z.string(), // Keep status
+    // Remove missingFields and nextQuestion here as we are rolling them into 'message'
+  }),
+
+  execute: async ({ inputData }) => {
+        if (!inputData.readyForPrediction) {
+            return {
+                status: "need_more_info",
+                // 🛑 FIX: Use ?? '' to ensure the message is always a string.
+                message: inputData.nextQuestion ?? 'More information required.', 
+            };
+        }
 
     const sd = inputData.structuredData;
 
@@ -136,9 +151,10 @@ const predictWage = createStep({
     const data = await response.json();
 
     return {
-      status: "success",
-      predictedWage: data.predictedWage,
-    };
+      status: "success",
+      predictedWage: data.predictedWage,
+      message: `Your predicted wage is $${data.predictedWage.toFixed(2)} per year.` // 🛑 Return a prediction message
+    };
   },
 });
 
@@ -146,16 +162,16 @@ const predictWage = createStep({
 // FINAL WORKFLOW
 // -----------------------------------------
 export const wagePredictionWorkflow = createWorkflow({
-  id: "wage-prediction-workflow",
-  inputSchema: z.object({
-    text: z.string(),
-  }),
-  outputSchema: z.object({
-    status: z.string(),
-    predictedWage: z.number().optional(),
-    nextQuestion: z.string().optional(),
-    missingFields: z.array(z.string()).optional(),
-  }),
+  id: "wage-prediction-workflow",
+  inputSchema: z.object({
+    text: z.string(),
+  }),
+  // 🛑 CRITICAL CHANGE: Simplify the final output schema
+  outputSchema: z.object({
+    status: z.string(),
+    message: z.string(), // New field for the conversational response
+    predictedWage: z.number().optional(),
+  }),
 })
   .then(captureInput)
   .then(extractInfo)
