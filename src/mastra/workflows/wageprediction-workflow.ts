@@ -1,5 +1,6 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
+import { WageDataSchema } from "../agents/wage-extractor-agent";
 
 // -----------------------------------------
 // STEP 1 — CAPTURE USER INPUT
@@ -26,28 +27,34 @@ const extractInfo = createStep({
     userText: z.string(),
   }),
   outputSchema: z.object({
-    extraction: z.any(), // we accept raw JSON from model
-  }),
-  execute: async ({ inputData, agents }: any) => {
+    extraction: z.any(),
+  }), // 🛑 CRITICAL FIX: Destructure 'mastra' instead of 'agents'
+  execute: async ({ inputData, mastra }: any) => {
     const systemPrompt = `
 You are an AI assistant that extracts and normalizes user data for a wage prediction model.
 Return a JSON object with age, years_experience, education, gender, country, industry,
 missingFields (array), and nextQuestion (string).
 Always return strictly valid JSON.
-`;
+`; // 🛑 NEW DOCS PATTERN: Retrieve the agent by the name you registered in mastra/index.ts
+    // We used 'wageExtractorAgent' in the previous step.
 
-    // Use Mastra's default LLM agent (you can configure in mastra.config.ts)
-    const response = await agents.llm.chat([
+    const agent = mastra.getAgent("wageExtractorAgent"); // Use the agent's generate method with the prompt messages
+
+    const response = await agent.generate([
       { role: "system", content: systemPrompt },
       { role: "user", content: inputData.userText },
     ]);
 
+    // Assuming the agent returns the text content in `response.text` as per docs
     let parsed;
+    const responseText = response.text || JSON.stringify(response);
 
     try {
-      parsed = JSON.parse(response.message);
+      // Clean up markdown code blocks if the LLM adds them
+      const cleanJson = responseText.replace(/```json|```/g, "").trim();
+      parsed = JSON.parse(cleanJson);
     } catch (err) {
-      parsed = { error: "Invalid model output", raw: response.message };
+      parsed = { error: "Invalid model output", raw: responseText };
     }
 
     return { extraction: parsed };
