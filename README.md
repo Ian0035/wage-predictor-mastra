@@ -1,0 +1,2 @@
+# wage-predictor-mastra
+Workflow
