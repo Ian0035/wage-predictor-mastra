@@ -137,13 +137,15 @@ const predictWage = createStep({
     const sd = inputData.structuredData;
     // NOTE: Keys must exactly match the external API:
     const payload = {
-      age: sd.age,
-      experienceYears: sd.years_experience, // Use years_experience from LLM output
-      education: sd.education,
-      gender: sd.gender,
-      country: sd.country,
-      industry: sd.industry,
-    };
+          age: sd.age,
+          // 🛑 FIX: Use the external API's key name ("experienceYears") 
+          // while referencing the LLM's data key (sd.years_experience)
+          experienceYears: sd.years_experience, 
+          education: sd.education,
+          gender: sd.gender,
+          country: sd.country,
+          industry: sd.industry,
+        };
 
     try {
         // Use native fetch instead of axios in Mastra environment
@@ -164,10 +166,12 @@ const predictWage = createStep({
 
         const data = await response.json();
 
+        const predictedWage = Array.isArray(data.predictedWage) ? data.predictedWage[0] : data.predictedWage;
+
         return {
           status: "success",
-          predictedWage: data.predictedWage,
-          message: `Your predicted wage is $${data.predictedWage.toFixed(2)} per year.`,
+          predictedWage: predictedWage,
+          message: `Your predicted wage is $${predictedWage.toFixed(2)} per year.`,
         };
     } catch (error: any) {
         console.error('Prediction error:', error.message || error);
