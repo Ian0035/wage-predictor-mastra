@@ -35,39 +35,19 @@ const captureInput = createStep({
     id: "capture-input",
     inputSchema: z.object({
         text: z.string(),
-        currentState: z.any().optional(),
+        existingData: z.any().optional(),
     }),
     outputSchema: z.object({
-        userText: z.string(),
+       userText: z.string(),      // translated to English
+        language: z.string(),      // detected language of original input
         existingData: z.any(),
     }),
-    execute: async ({ inputData }) => {
-        return {
-            userText: inputData.text,
-            existingData: inputData.currentState || {},
-        };
-    },
-});
-
-
-const translateInput = createStep({
-  id: "translate-input",
-  inputSchema: z.object({
-    userText: z.string(),
-    existingData: z.any(),
-  }),
-  outputSchema: z.object({
-    userText: z.string(),      // translated to English
-    language: z.string(),      // detected language of original input
-    existingData: z.any(),
-  }),
-
-  execute: async ({ inputData, mastra }) => {
+    execute: async ({ inputData, mastra }) => {
     const agent = mastra.getAgent("wageExtractorAgent");
 
     const prompt = `
 Detect the language of the following text:
-"${inputData.userText}"
+"${inputData.text}"
 
 Return JSON exactly like:
 {
@@ -84,7 +64,7 @@ Return JSON exactly like:
       const txt = jsonMatch ? jsonMatch[1].trim() : resp.text.trim();
       parsed = JSON.parse(txt);
     } catch {
-      parsed = { language: "en", translated: inputData.userText };
+      parsed = { language: "en", translated: inputData.text };
     }
 
     return {
@@ -94,6 +74,8 @@ Return JSON exactly like:
     };
   },
 });
+
+
 /* ---------------------------------------------------------------------------
  * STEP 2 — USE LLM (wageExtractorAgent) TO EXTRACT + MERGE STRUCTURED DATA
  * NOTE: Updated to use Zod parsing for robust output handling.
@@ -452,7 +434,7 @@ export const wagePredictionWorkflow = createWorkflow({
     id: "wage-prediction-workflow",
     inputSchema: z.object({
         text: z.string(),
-        currentState: z.any().optional(),
+        existingData: z.any().optional(),
     }),
     outputSchema: z.object({
         status: z.string(),
@@ -465,7 +447,6 @@ export const wagePredictionWorkflow = createWorkflow({
     }),
 })
     .then(captureInput)
-    .then(translateInput)
     .then(extractInfo)
     .then(checkMissingData)
     .then(standardizeData) // <-- NEW STEP HERE
