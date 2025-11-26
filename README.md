@@ -85,7 +85,7 @@ To make the workflow production-friendly and robust:
 
 ---
 
-## 6. Reflection
+## 6. Summary
 The final Mastra workflow transforms the original backend logic into a modular, multi-language, user-friendly system.  
 It guides users through missing fields conversationally, ensures consistent data for the prediction API, and adds extra value through translation and explanations.
 
