@@ -262,7 +262,7 @@ const predictWage = createStep({
         structuredData: z.any().optional(), // Now passes cleanData as structuredData
         language: z.string(),
     }),
-    execute: async ({ inputData }) => {
+    execute: async ({ inputData, mastra }) => {
         // If fields are missing (from Step 3.5), return a question back to the user
         if (!inputData.readyForPrediction) {
             return {
@@ -319,10 +319,35 @@ const predictWage = createStep({
                 ? data.predictedWage[0]
                 : data.predictedWage;
 
+            // After we compute predictedWage:
+let message = `Your predicted wage is $${predictedWage.toFixed(2)} per year.`;
+
+// If the user's language isn't English, translate the message:
+if (inputData.language && inputData.language.toLowerCase() !== "en") {
+    try {
+        const agent = mastra.getAgent("wageExtractorAgent");
+        const translationPrompt = `
+Translate the following message into the language with ISO code "${inputData.language}":
+"${message}"
+
+Return ONLY the translated sentence with no extra text.
+        `;
+
+        const translationResp = await agent.generate([
+            { role: "user", content: translationPrompt }
+        ]);
+
+        const translated = translationResp.text.trim();
+        if (translated) message = translated;
+    } catch (err) {
+        console.error("Translation failed, falling back to English message.");
+    }
+}
+
             return {
                 status: "success",
                 predictedWage,
-                message: `Your predicted wage is $${predictedWage.toFixed(2)} per year.`,
+                message,
                 structuredData: sd, // Pass clean data for the explanation step
                 language: inputData.language,
             };
