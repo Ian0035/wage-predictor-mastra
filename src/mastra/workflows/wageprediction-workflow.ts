@@ -50,6 +50,50 @@ const captureInput = createStep({
 });
 
 
+const translateInput = createStep({
+  id: "translate-input",
+  inputSchema: z.object({
+    userText: z.string(),
+    existingData: z.any(),
+  }),
+  outputSchema: z.object({
+    userText: z.string(),      // translated to English
+    language: z.string(),      // detected language of original input
+    existingData: z.any(),
+  }),
+
+  execute: async ({ inputData, mastra }) => {
+    const agent = mastra.getAgent("wageExtractorAgent");
+
+    const prompt = `
+Detect the language of the following text:
+"${inputData.userText}"
+
+Return JSON exactly like:
+{
+  "language": "<ISO-639 language code>",
+  "translated": "<English translation OR original text if already English>"
+}
+    `;
+
+    const resp = await agent.generate([{ role: "user", content: prompt }]);
+
+    let parsed;
+    try {
+      const jsonMatch = resp.text.match(/```json\s*([\s\S]*?)```/);
+      const txt = jsonMatch ? jsonMatch[1].trim() : resp.text.trim();
+      parsed = JSON.parse(txt);
+    } catch {
+      parsed = { language: "en", translated: inputData.userText };
+    }
+
+    return {
+      userText: parsed.translated,
+      language: parsed.language,
+      existingData: inputData.existingData,
+    };
+  },
+});
 /* ---------------------------------------------------------------------------
  * STEP 2 — USE LLM (wageExtractorAgent) TO EXTRACT + MERGE STRUCTURED DATA
  * NOTE: Updated to use Zod parsing for robust output handling.
@@ -59,11 +103,13 @@ const extractInfo = createStep({
     id: "extract-info",
     inputSchema: z.object({
         userText: z.string(),
+        language: z.string(),
         existingData: z.any(),
     }),
     // Use the defined schema for the output
     outputSchema: z.object({
         extraction: LLMExtractionSchema,
+        language: z.string(),
     }),
     execute: async ({ inputData, mastra }: any) => {
         const agent = mastra.getAgent("wageExtractorAgent");
@@ -103,7 +149,7 @@ Using the system instructions provided to you, merge the new input with the CURR
             parsedData = { error: "JSON_PARSE_OR_VALIDATION_FAILED", raw: responseText };
         }
 
-        return { extraction: parsedData };
+        return { extraction: parsedData, language: inputData.language};
     },
 });
 
@@ -117,12 +163,14 @@ const checkMissingData = createStep({
     id: "check-missing-data",
     inputSchema: z.object({
         extraction: LLMExtractionSchema, // Must match Step 2's output type
+        language: z.string(),
     }),
     outputSchema: z.object({
         readyForPrediction: z.boolean(),
         missingFields: z.array(z.string()),
         nextQuestion: z.string().nullable(),
         structuredData: z.any(), // Still any for flexibility, but it follows the schema
+        language: z.string(),
     }),
     execute: async ({ inputData }) => {
         // Handle earlier LLM JSON parse/validation failure
@@ -133,6 +181,7 @@ const checkMissingData = createStep({
                     "Sorry, I had trouble understanding that. Please restate your information clearly.",
                 missingFields: ["data_quality"],
                 structuredData: inputData.extraction,
+                language: inputData.language,
             };
         }
 
@@ -145,6 +194,7 @@ const checkMissingData = createStep({
             missingFields: missing,
             nextQuestion: extraction.nextQuestion ?? null,
             structuredData: extraction, // Pass the clean, validated extraction object
+            language: inputData.language,
         };
     },
 });
@@ -163,12 +213,14 @@ const standardizeData = createStep({
         structuredData: z.any(),
         nextQuestion: z.string().nullable(), // Pass through
         missingFields: z.array(z.string()), // Pass through
+        language: z.string(),
     }),
     outputSchema: z.object({
         readyForPrediction: z.boolean(),
         cleanData: z.any(),
         nextQuestion: z.string().nullable(),
         missingFields: z.array(z.string()),
+        language: z.string(),
     }),
     execute: async ({ inputData }) => {
         // If not ready, just pass everything through without cleaning
@@ -178,6 +230,7 @@ const standardizeData = createStep({
                 cleanData: inputData.structuredData, // Passes partial data
                 nextQuestion: inputData.nextQuestion,
                 missingFields: inputData.missingFields,
+                language: inputData.language,
             };
         }
 
@@ -200,6 +253,7 @@ const standardizeData = createStep({
             cleanData,
             nextQuestion: inputData.nextQuestion,
             missingFields: inputData.missingFields,
+            language: inputData.language,
         };
     },
 });
@@ -217,12 +271,14 @@ const predictWage = createStep({
         cleanData: z.any(), // <-- Now uses the cleaned data
         nextQuestion: z.string().nullable(),
         missingFields: z.array(z.string()),
+        language: z.string(),
     }),
     outputSchema: z.object({
         status: z.string(),
         message: z.string(),
         predictedWage: z.number().optional(),
         structuredData: z.any().optional(), // Now passes cleanData as structuredData
+        language: z.string(),
     }),
     execute: async ({ inputData }) => {
         // If fields are missing (from Step 3.5), return a question back to the user
@@ -231,6 +287,7 @@ const predictWage = createStep({
                 status: "need_more_info",
                 message: inputData.nextQuestion ?? "More information required.",
                 structuredData: inputData.cleanData,  // Pass through partial/clean data
+                language: inputData.language,
             };
         }
 
@@ -285,6 +342,7 @@ const predictWage = createStep({
                 predictedWage,
                 message: `Your predicted wage is $${predictedWage.toFixed(2)} per year.`,
                 structuredData: sd, // Pass clean data for the explanation step
+                language: inputData.language,
             };
         } catch (error: any) {
             console.error("Prediction API Failed:", error.message || error);
@@ -293,6 +351,7 @@ const predictWage = createStep({
                 status: "error",
                 message: "Sorry, the wage prediction service is currently unavailable.",
                 structuredData: sd,
+                language: inputData.language,
             };
         }
     },
@@ -310,6 +369,7 @@ const explainPrediction = createStep({
         message: z.string(),
         predictedWage: z.number().optional(),
         structuredData: z.any().optional(),
+        language: z.string(),
     }),
     outputSchema: z.object({
         explanation: z.string(),
@@ -318,7 +378,7 @@ const explainPrediction = createStep({
     execute: async ({ inputData, mastra }) => {
         // If wage was not predicted, skip explanation
         if (inputData.status !== "success") {
-            return { explanation: "", keyFactors: [] };
+            return { explanation: "", keyFactors: [], language: inputData.language };
         }
 
         const agent = mastra.getAgent("wageExtractorAgent");
@@ -336,7 +396,7 @@ Given this profile:
 
 Predicted Annual Wage: $${inputData.predictedWage ?? "N/A"}
 
-Explain in 2-3 sentences why this prediction makes sense. Then list the top 3 factors that most influenced this wage.
+Explain in 2-3 sentences why this prediction makes sense. Then list the top 3 factors that most influenced this wage in ${inputData.language}.
 
 Format your response as:
 EXPLANATION: [your explanation]
@@ -374,9 +434,11 @@ FACTORS:
                         "Years of experience",
                         "Educational background",
                     ],
+            language: inputData.language,
         };
     },
 });
+
 
 
 /* ---------------------------------------------------------------------------
@@ -397,9 +459,11 @@ export const wagePredictionWorkflow = createWorkflow({
         structuredData: z.any().optional(),
         explanation: z.string().optional(),
         keyFactors: z.array(z.string()).optional(),
+        language: z.string(),
     }),
 })
     .then(captureInput)
+    .then(translateInput)
     .then(extractInfo)
     .then(checkMissingData)
     .then(standardizeData) // <-- NEW STEP HERE
