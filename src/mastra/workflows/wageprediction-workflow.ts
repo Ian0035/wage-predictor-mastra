@@ -396,7 +396,7 @@ Given this profile:
 
 Predicted Annual Wage: $${inputData.predictedWage ?? "N/A"}
 
-Explain in 2-3 sentences why this prediction makes sense. Then list the top 3 factors that most influenced this wage in ${inputData.language}.
+Explain in 2-3 sentences why this prediction makes sense. Then list the top 3 factors that most influenced this wage.
 
 Format your response as:
 EXPLANATION: [your explanation]
@@ -404,6 +404,8 @@ FACTORS:
 1. [factor 1]
 2. [factor 2]
 3. [factor 3]
+
+Provide the response in the following language that correlates to this language code: ${inputData.language}
 `;
 
         const response = await agent.generate([
