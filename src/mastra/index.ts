@@ -5,6 +5,5 @@ import { wagePredictionWorkflow } from "./workflows/wageprediction-workflow";
 
 export const mastra = new Mastra({
   workflows: { wagePredictionWorkflow },
-  // Register the agent instance
   agents: { wageExtractorAgent, translatorAgent }, 
 });

@@ -1,8 +1,6 @@
 import { createStep, createWorkflow } from "@mastra/core/workflows";
 import { z } from "zod";
 
-// NOTE: We define a Zod schema for the expected LLM output for reliability.
-
 /**
  * Core fields the prediction API needs. Nullable as the LLM might not find them.
  */
@@ -15,10 +13,6 @@ const WageDataSchema = z.object({
   industry: z.string().nullable(),
 });
 
-/**
- * The full structure expected from the LLM (includes core data + control fields).
- * We make it partial with catchall for maximum parsing resilience.
- */
 const LLMExtractionSchema = z
   .object({
     ...WageDataSchema.shape,
@@ -26,11 +20,10 @@ const LLMExtractionSchema = z
     nextQuestion: z.string().nullable(),
   })
   .partial()
-  .catchall(z.any()); // Partial + Catchall for max resilience during parsing
+  .catchall(z.any());
 
 /* ---------------------------------------------------------------------------
- * STEP 1 — CAPTURE USER INPUT & EXISTING CONVERSATION STATE
- * (No changes here, remains the same)
+ * STEP 1 — CAPTURE USER INPUT & EXISTING CONVERSATION STATE & TRANSLATE IF NEEDED
  * ---------------------------------------------------------------------------
  */
 const captureInput = createStep({
@@ -40,8 +33,8 @@ const captureInput = createStep({
     existingData: z.any().optional(),
   }),
   outputSchema: z.object({
-    userText: z.string(), // translated to English
-    language: z.string(), // detected language of original input
+    userText: z.string(),
+    language: z.string(),
     existingData: z.any(),
   }),
   execute: async ({ inputData, mastra }) => {
@@ -79,7 +72,6 @@ Return JSON exactly like:
 
 /* ---------------------------------------------------------------------------
  * STEP 2 — USE LLM (wageExtractorAgent) TO EXTRACT + MERGE STRUCTURED DATA
- * NOTE: Updated to use Zod parsing for robust output handling.
  * ---------------------------------------------------------------------------
  */
 const extractInfo = createStep({
@@ -89,7 +81,6 @@ const extractInfo = createStep({
     language: z.string(),
     existingData: z.any(),
   }),
-  // Use the defined schema for the output
   outputSchema: z.object({
     extraction: LLMExtractionSchema,
     language: z.string(),
@@ -98,7 +89,6 @@ const extractInfo = createStep({
     const agent = mastra.getAgent("wageExtractorAgent");
     const contextString = JSON.stringify(inputData.existingData, null, 2);
 
-    // ... (Prompt construction remains the same) ...
     const userPrompt = `
 CURRENT STATE (Known Data): ${contextString}
 
@@ -115,19 +105,15 @@ Using the system instructions provided to you, merge the new input with the CURR
     const responseText = response.text || JSON.stringify(response);
 
     try {
-      // Safely extract JSON from ```json fences
       const jsonMatch = responseText.match(/```json\s*([\s\S]*?)\s*```/);
       let jsonString =
         jsonMatch && jsonMatch[1] ? jsonMatch[1].trim() : responseText.trim();
 
       const rawParsed = JSON.parse(jsonString);
 
-      // --- NEW: Use Zod to validate and normalize the parsed JSON ---
-      // If validation fails, the catch block handles the error
       parsedData = LLMExtractionSchema.parse(rawParsed);
     } catch (err) {
       console.error("Parse/Validation error:", responseText, err);
-      // On failure, return a diagnostic object that checkMissingData can handle
       parsedData = {
         error: "JSON_PARSE_OR_VALIDATION_FAILED",
         raw: responseText,
@@ -140,24 +126,22 @@ Using the system instructions provided to you, merge the new input with the CURR
 
 /* ---------------------------------------------------------------------------
  * STEP 3 — CHECK FOR MISSING FIELDS & HANDLE PARSE ERRORS
- * NOTE: Updated to expect the structure from LLMExtractionSchema.
  * ---------------------------------------------------------------------------
  */
 const checkMissingData = createStep({
   id: "check-missing-data",
   inputSchema: z.object({
-    extraction: LLMExtractionSchema, // Must match Step 2's output type
+    extraction: LLMExtractionSchema,
     language: z.string(),
   }),
   outputSchema: z.object({
     readyForPrediction: z.boolean(),
     missingFields: z.array(z.string()),
     nextQuestion: z.string().nullable(),
-    structuredData: z.any(), // Still any for flexibility, but it follows the schema
+    structuredData: z.any(),
     language: z.string(),
   }),
   execute: async ({ inputData }) => {
-    // Handle earlier LLM JSON parse/validation failure
     if (inputData.extraction.error) {
       return {
         readyForPrediction: false,
@@ -169,7 +153,6 @@ const checkMissingData = createStep({
       };
     }
 
-    // Normal path — use the data validated by Zod
     const extraction = inputData.extraction as z.infer<
       typeof LLMExtractionSchema
     >;
@@ -179,27 +162,26 @@ const checkMissingData = createStep({
       readyForPrediction: missing.length === 0,
       missingFields: missing,
       nextQuestion: extraction.nextQuestion ?? null,
-      structuredData: extraction, // Pass the clean, validated extraction object
+      structuredData: extraction,
       language: inputData.language,
     };
   },
 });
 
 /* ---------------------------------------------------------------------------
- * STEP 3.5 — STANDARDIZE/CLEAN DATA (NEW STEP)
+ * STEP 3.5 — STANDARDIZE/CLEAN DATA
  * ---------------------------------------------------------------------------
- * This step cleans and standardizes the data before the API call,
- * demonstrating better pipeline hygiene and preparation for external systems.
  */
 const standardizeData = createStep({
   id: "standardize-data",
   inputSchema: z.object({
     readyForPrediction: z.boolean(),
     structuredData: z.any(),
-    nextQuestion: z.string().nullable(), // Pass through
-    missingFields: z.array(z.string()), // Pass through
+    nextQuestion: z.string().nullable(),
+    missingFields: z.array(z.string()),
     language: z.string(),
   }),
+
   outputSchema: z.object({
     readyForPrediction: z.boolean(),
     cleanData: z.any(),
@@ -207,12 +189,12 @@ const standardizeData = createStep({
     missingFields: z.array(z.string()),
     language: z.string(),
   }),
+
   execute: async ({ inputData }) => {
-    // If not ready, just pass everything through without cleaning
     if (!inputData.readyForPrediction) {
       return {
         readyForPrediction: false,
-        cleanData: inputData.structuredData, // Passes partial data
+        cleanData: inputData.structuredData,
         nextQuestion: inputData.nextQuestion,
         missingFields: inputData.missingFields,
         language: inputData.language,
@@ -221,18 +203,14 @@ const standardizeData = createStep({
 
     const sd = inputData.structuredData;
 
-    // Example Standardization: Ensure key fields are trimmed/cased correctly
     const cleanData = {
       ...sd,
-      // If the API expects specific casing for industry:
-      industry: sd.industry?.trim(),
-      country: sd.country?.trim(),
-      // If the API uses different value names for 'education' than the LLM prompt:
-      education:
-        sd.education ===
-        "Some college/university study without earning a bachelor’s degree"
-          ? "Some College"
-          : sd.education,
+      age: sd.age?.trim() ?? null,
+      years_experience: sd.years_experience?.trim() ?? null,
+      education: sd.education?.trim() ?? null,
+      gender: sd.gender?.trim() ?? null,
+      country: sd.country?.trim() ?? null,
+      industry: sd.industry?.trim() ?? null,
     };
 
     return {
@@ -247,14 +225,13 @@ const standardizeData = createStep({
 
 /* ---------------------------------------------------------------------------
  * STEP 4 — CALL EXTERNAL WAGE PREDICTION API
- * NOTE: Updated to use 'cleanData' from the new Step 3.5.
  * ---------------------------------------------------------------------------
  */
 const predictWage = createStep({
   id: "predict-wage",
   inputSchema: z.object({
     readyForPrediction: z.boolean(),
-    cleanData: z.any(), // <-- Now uses the cleaned data
+    cleanData: z.any(),
     nextQuestion: z.string().nullable(),
     missingFields: z.array(z.string()),
     language: z.string(),
@@ -263,21 +240,20 @@ const predictWage = createStep({
     status: z.string(),
     message: z.string(),
     predictedWage: z.number().optional(),
-    structuredData: z.any().optional(), // Now passes cleanData as structuredData
+    structuredData: z.any().optional(),
     language: z.string(),
   }),
   execute: async ({ inputData, mastra }) => {
-    // If fields are missing (from Step 3.5), return a question back to the user
     if (!inputData.readyForPrediction) {
       return {
         status: "need_more_info",
         message: inputData.nextQuestion ?? "More information required.",
-        structuredData: inputData.cleanData, // Pass through partial/clean data
+        structuredData: inputData.cleanData,
         language: inputData.language,
       };
     }
 
-    const sd = inputData.cleanData; // Use clean data
+    const sd = inputData.cleanData;
 
     const payload = {
       age: sd.age,
@@ -288,7 +264,6 @@ const predictWage = createStep({
       industry: sd.industry,
     };
 
-    // ... (Rest of the fetch/API logic remains the same) ...
     try {
       const response = await fetch(
         "https://plumber-api-2-latest.onrender.com/predict",
@@ -303,7 +278,6 @@ const predictWage = createStep({
       );
       console.log("Payload sent to Prediction API:", JSON.stringify(payload));
 
-      // ... (Error handling and JSON parsing remains the same) ...
       if (!response.ok) {
         const errorText = await response.text();
         console.error(
@@ -319,10 +293,8 @@ const predictWage = createStep({
         ? data.predictedWage[0]
         : data.predictedWage;
 
-      // After we compute predictedWage:
       let message = `Your predicted wage is $${predictedWage.toFixed(2)} per year.`;
 
-      // If the user's language isn't English, translate the message:
       if (inputData.language && inputData.language.toLowerCase() !== "en") {
         try {
           const agent = mastra.getAgent("translatorAgent");
@@ -348,7 +320,7 @@ Return ONLY the translated sentence with no extra text.
         status: "success",
         predictedWage,
         message,
-        structuredData: sd, // Pass clean data for the explanation step
+        structuredData: sd,
         language: inputData.language,
       };
     } catch (error: any) {
@@ -365,8 +337,7 @@ Return ONLY the translated sentence with no extra text.
 });
 
 /* ---------------------------------------------------------------------------
- * STEP 5 — OPTIONAL LLM EXPLANATION OF THE PREDICTION
- * (No changes needed, as it handles the 'status' being non-success)
+ * STEP 5 — LLM EXPLANATION OF THE PREDICTION
  * ---------------------------------------------------------------------------
  */
 const explainPrediction = createStep({
@@ -383,7 +354,6 @@ const explainPrediction = createStep({
     keyFactors: z.array(z.string()),
   }),
   execute: async ({ inputData, mastra }) => {
-    // If wage was not predicted, skip explanation
     if (inputData.status !== "success") {
       return { explanation: "", keyFactors: [], language: inputData.language };
     }
@@ -391,7 +361,6 @@ const explainPrediction = createStep({
     const agent = mastra.getAgent("wageExtractorAgent");
     const sd = inputData.structuredData || {};
 
-    // ... (Rest of the explanation logic remains the same) ...
     const prompt = `
 Given this profile:
 - Age: ${sd.age ?? "N/A"}
@@ -419,7 +388,6 @@ Provide the response in the following language that correlates to this language 
 
     const text = response.text || "";
 
-    // Extract explanation + three factors
     const explanationMatch = text.match(/EXPLANATION:\s*(.+?)(?=FACTORS:|$)/s);
     const factorsMatch = text.match(/FACTORS:\s*([\s\S]+)/);
 
@@ -448,7 +416,6 @@ Provide the response in the following language that correlates to this language 
 
 /* ---------------------------------------------------------------------------
  * FINAL WORKFLOW — Orchestrates All Steps
- * NOTE: Added standardizeData step.
  * ---------------------------------------------------------------------------
  */
 export const wagePredictionWorkflow = createWorkflow({
@@ -470,7 +437,7 @@ export const wagePredictionWorkflow = createWorkflow({
   .then(captureInput)
   .then(extractInfo)
   .then(checkMissingData)
-  .then(standardizeData) // <-- NEW STEP HERE
+  .then(standardizeData)
   .then(predictWage)
   .then(explainPrediction)
   .commit();

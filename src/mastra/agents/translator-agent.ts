@@ -2,10 +2,8 @@ import { Agent } from "@mastra/core/agent";
 
 export const translatorAgent = new Agent({
   name: "translator-agent",
-  // 💡 Use a faster model for simple translation tasks
   model: "groq/llama-3.1-8b-instant", 
   
-  // The system prompt should be precise and focused
   instructions: `
     You are an expert AI language assistant focused strictly on translation and language detection. 
     Your tasks are:

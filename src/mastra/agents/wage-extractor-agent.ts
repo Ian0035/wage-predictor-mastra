@@ -1,13 +1,9 @@
 import { Agent } from "@mastra/core/agent";
 
-// The Groq API key is automatically picked up by Mastra from the environment variables.
-
 export const wageExtractorAgent = new Agent({
   name: "wage-extractor-agent",
-  // 🛑 NOTE: Updated model from the deprecated 'llama3-70b-8192'
   model: "groq/llama-3.3-70b-versatile", 
   
-  // The system prompt from your service file becomes the Agent's instructions
   instructions: `
 You are an AI assistant that extracts and normalizes user data to structured categories for a wage prediction model.
 
