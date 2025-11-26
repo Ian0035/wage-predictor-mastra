@@ -10,6 +10,9 @@ The focus was on:
 
 ---
 
+![workflow image](workflow.JPG)
+
+
 ## 2. Workflow Structure
 The workflow follows a simple but robust pipeline:
 
